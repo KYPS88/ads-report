@@ -101,8 +101,16 @@
     box-shadow: inset 0 0 0 1px var(--series-1);
   }
   .range-btn:focus-visible, .tbl-btn:focus-visible, .connect-btn:focus-visible,
-  .conn-form input:focus-visible, .conn-form button:focus-visible {
+  .conn-form input:focus-visible, .conn-form button:focus-visible,
+  .acct-switch select:focus-visible {
     outline: 2px solid var(--series-1); outline-offset: 2px;
+  }
+  .acct-switch { display: inline-flex; align-items: center; gap: 6px; margin-left: 10px; min-width: 0; }
+  .acct-switch select {
+    font: inherit; font-size: 13px; font-weight: 500;
+    color: var(--ink); background: var(--surface);
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 5px 10px; cursor: pointer; max-width: 260px;
   }
 
   /* ---- connect panel ---- */
@@ -231,6 +239,10 @@
       <button class="range-btn" id="btn-r30" data-days="30">30 วัน</button>
       <button class="range-btn" id="btn-r90" data-days="90">90 วัน</button>
     </span>
+    <span class="acct-switch" id="acctSwitch" hidden>
+      <label class="lbl" for="acctSelect">บัญชี</label>
+      <select id="acctSelect"></select>
+    </span>
     <span class="spacer"></span>
     <button class="connect-btn" id="connToggle" aria-expanded="false" aria-controls="connPanel">เชื่อมต่อ Meta API</button>
   </div>
@@ -242,8 +254,8 @@
     </div>
     <form class="conn-form" id="connForm">
       <div class="conn-field acct">
-        <label for="acctInput">Ad Account ID</label>
-        <input id="acctInput" name="acct" placeholder="act_1234567890" autocomplete="off" spellcheck="false">
+        <label for="acctInput">Ad Account ID (หลายบัญชีคั่นด้วย , )</label>
+        <input id="acctInput" name="acct" placeholder="act_1111111111, act_2222222222" autocomplete="off" spellcheck="false">
       </div>
       <div class="conn-field token">
         <label for="tokenInput">Access Token (สิทธิ์ ads_read)</label>
@@ -337,7 +349,9 @@ const PURCHASE_ACTION_TYPES = [
   "offsite_conversion.fb_pixel_purchase",
 ];
 
-let DATA = null;       /* { daily, contentDaily, source } */
+let DATA = null;       /* { daily, contentDaily, source } — ชุดข้อมูลที่กำลังแสดง */
+let ACCOUNTS = null;   /* Map: act_id -> { id, name, data } เมื่อเชื่อมต่อ Meta หลายบัญชี */
+let selectedAcct = null;
 let rangeDays = 30;
 
 /* ---------------- ข้อมูลตัวอย่าง ---------------- */
@@ -457,11 +471,28 @@ async function fbFetchAll(url) {
   return rows;
 }
 
+function normalizeAcct(id) {
+  id = id.trim();
+  if (/^\d+$/.test(id)) id = "act_" + id;
+  if (!/^act_\d+$/.test(id)) throw new Error('"' + id + '" ไม่ใช่ Ad Account ID — ต้องอยู่ในรูปแบบ act_1234567890');
+  return id;
+}
+function parseAcctList(raw) {
+  const ids = [...new Set(raw.split(/[\s,]+/).filter(Boolean).map(normalizeAcct))];
+  if (!ids.length) throw new Error("กรอก Ad Account ID อย่างน้อย 1 บัญชี");
+  return ids;
+}
+
+async function fetchAccountName(acct, token) {
+  try {
+    const res = await fetch("https://graph.facebook.com/" + API_VERSION + "/" + acct +
+      "?fields=name&access_token=" + encodeURIComponent(token));
+    const js = await res.json();
+    return (!js.error && js.name) ? js.name : acct;
+  } catch { return acct; }
+}
+
 async function loadFromMeta(acct, token) {
-  if (!/^act_\d+$/.test(acct)) {
-    if (/^\d+$/.test(acct)) acct = "act_" + acct;
-    else throw new Error("Ad Account ID ต้องอยู่ในรูปแบบ act_1234567890");
-  }
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const range = days => {
     const since = new Date(today); since.setDate(since.getDate() - (days - 1));
@@ -496,6 +527,26 @@ async function loadFromMeta(acct, token) {
     throw new Error("ไม่พบข้อมูลโฆษณาในบัญชีนี้ช่วง " + ACCOUNT_DAYS + " วันล่าสุด");
   }
   return { daily, contentDaily, source: "meta" };
+}
+
+/* ดึงหลายบัญชีพร้อมกัน — คืน { accounts: Map, failed: [{id, error}] } */
+async function loadAccounts(ids, token) {
+  const results = await Promise.allSettled(ids.map(async id => {
+    const [data, name] = await Promise.all([
+      loadFromMeta(id, token),
+      fetchAccountName(id, token),
+    ]);
+    return { id, name, data };
+  }));
+  const accounts = new Map(), failed = [];
+  results.forEach((r, i) => {
+    if (r.status === "fulfilled") accounts.set(r.value.id, r.value);
+    else failed.push({ id: ids[i], error: r.reason && r.reason.message ? r.reason.message : String(r.reason) });
+  });
+  if (!accounts.size) {
+    throw new Error(failed.map(f => f.id + ": " + f.error).join(" | "));
+  }
+  return { accounts, failed };
 }
 
 /* ---------------- data.json (จาก scripts/fetch-data.mjs) ---------------- */
@@ -924,6 +975,7 @@ function renderAll() {
     fmtDateShort.format(first) + " – " + fmtDateShort.format(last) + " (" + rangeDays + " วันล่าสุด)";
   document.getElementById("srcBadge").textContent = SOURCE_BADGES[DATA.source] || DATA.source;
   document.getElementById("pageFoot").hidden = DATA.source !== "sample";
+  updateAcctSwitch();
   for (const b of document.querySelectorAll(".range-btn"))
     b.setAttribute("aria-pressed", String(Number(b.dataset.days) === rangeDays));
   renderTiles();
@@ -935,6 +987,31 @@ function renderAll() {
 for (const b of document.querySelectorAll(".range-btn")) {
   b.addEventListener("click", () => { rangeDays = Number(b.dataset.days); renderAll(); });
 }
+
+/* ---- ตัวสลับบัญชี ---- */
+
+function updateAcctSwitch() {
+  const wrap = document.getElementById("acctSwitch");
+  const sel = document.getElementById("acctSelect");
+  const show = DATA.source === "meta" && ACCOUNTS && ACCOUNTS.size > 1;
+  wrap.hidden = !show;
+  if (!show) return;
+  sel.replaceChildren();
+  for (const a of ACCOUNTS.values()) {
+    const opt = el("option", { value: a.id }, a.name);
+    sel.append(opt);
+  }
+  sel.value = selectedAcct;
+}
+
+document.getElementById("acctSelect").addEventListener("change", ev => {
+  const a = ACCOUNTS && ACCOUNTS.get(ev.target.value);
+  if (!a) return;
+  selectedAcct = a.id;
+  DATA = a.data;
+  const s = readSettings(); s.selected = selectedAcct; writeSettings(s);
+  renderAll();
+});
 
 function toggleTable(btnId, tblId, chartSel) {
   const btn = document.getElementById(btnId), tbl = document.getElementById(tblId);
@@ -977,20 +1054,35 @@ connToggle.addEventListener("click", () => {
   connToggle.setAttribute("aria-expanded", String(!connPanel.hidden));
 });
 
-document.getElementById("connForm").addEventListener("submit", async ev => {
-  ev.preventDefault();
-  const acct = document.getElementById("acctInput").value.trim();
-  const token = document.getElementById("tokenInput").value.trim();
-  if (!acct || !token) { setStatus("กรอก Ad Account ID และ Access Token ก่อน", true); return; }
-  const submit = document.getElementById("connSubmit");
-  submit.disabled = true;
-  setStatus("กำลังดึงข้อมูลจาก Meta...");
+/* เชื่อมต่อหลายบัญชีในครั้งเดียว แล้วเลือกดูทีละบัญชีจาก dropdown */
+async function connectMeta(rawAccts, token, savedSelected) {
+  const ids = parseAcctList(rawAccts);
+  setStatus(ids.length > 1 ? "กำลังดึงข้อมูล " + ids.length + " บัญชีจาก Meta..." : "กำลังดึงข้อมูลจาก Meta...");
   document.querySelectorAll(".chart-wrap").forEach(n => n.classList.add("loading"));
   try {
-    DATA = await loadFromMeta(acct, token);
-    writeSettings({ acct, token, useMeta: true });
-    setStatus("ดึงข้อมูลสำเร็จ — อัปเดตล่าสุด " + new Date().toLocaleString("th-TH"));
+    const { accounts, failed } = await loadAccounts(ids, token);
+    ACCOUNTS = accounts;
+    selectedAcct = (savedSelected && accounts.has(savedSelected)) ? savedSelected : accounts.keys().next().value;
+    DATA = accounts.get(selectedAcct).data;
+    writeSettings({ accts: ids.join(", "), token, useMeta: true, selected: selectedAcct });
+    let msg = "ดึงข้อมูลสำเร็จ " + accounts.size + " บัญชี — อัปเดตล่าสุด " + new Date().toLocaleString("th-TH");
+    if (failed.length) msg += " (ไม่สำเร็จ " + failed.length + " บัญชี: " + failed.map(f => f.id + " — " + f.error).join(" | ") + ")";
+    setStatus(msg, failed.length > 0);
     renderAll();
+  } finally {
+    document.querySelectorAll(".chart-wrap").forEach(n => n.classList.remove("loading"));
+  }
+}
+
+document.getElementById("connForm").addEventListener("submit", async ev => {
+  ev.preventDefault();
+  const rawAccts = document.getElementById("acctInput").value.trim();
+  const token = document.getElementById("tokenInput").value.trim();
+  if (!rawAccts || !token) { setStatus("กรอก Ad Account ID และ Access Token ก่อน", true); return; }
+  const submit = document.getElementById("connSubmit");
+  submit.disabled = true;
+  try {
+    await connectMeta(rawAccts, token, selectedAcct);
   } catch (e) {
     let msg = "ดึงข้อมูลไม่สำเร็จ: " + (e && e.message ? e.message : e);
     if (e instanceof TypeError) {
@@ -999,7 +1091,6 @@ document.getElementById("connForm").addEventListener("submit", async ev => {
     setStatus(msg, true);
   } finally {
     submit.disabled = false;
-    document.querySelectorAll(".chart-wrap").forEach(n => n.classList.remove("loading"));
   }
 });
 
@@ -1014,16 +1105,15 @@ document.getElementById("useSampleBtn").addEventListener("click", () => {
 
 async function init() {
   const s = readSettings();
-  if (s.acct) document.getElementById("acctInput").value = s.acct;
+  const savedAccts = s.accts || s.acct || "";  /* s.acct = รูปแบบเก่า (บัญชีเดียว) */
+  if (savedAccts) document.getElementById("acctInput").value = savedAccts;
   if (s.token) document.getElementById("tokenInput").value = s.token;
 
-  if (s.useMeta && s.acct && s.token) {
+  if (s.useMeta && savedAccts && s.token) {
     connPanel.hidden = false;
     connToggle.setAttribute("aria-expanded", "true");
-    setStatus("กำลังดึงข้อมูลจาก Meta...");
     try {
-      DATA = await loadFromMeta(s.acct, s.token);
-      setStatus("ดึงข้อมูลสำเร็จ — อัปเดตล่าสุด " + new Date().toLocaleString("th-TH"));
+      await connectMeta(savedAccts, s.token, s.selected);
     } catch (e) {
       setStatus("ดึงข้อมูลไม่สำเร็จ: " + (e && e.message ? e.message : e), true);
     }
