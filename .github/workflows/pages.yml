@@ -1,0 +1,67 @@
+name: Deploy dashboard to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 23 * * *"   # ทุกวัน 06:00 เวลาไทย — ดึงข้อมูลใหม่แล้ว deploy ซ้ำ
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # ดึงข้อมูลจริงจาก Meta เมื่อตั้ง secrets ไว้แล้วเท่านั้น
+      # (ยังไม่ตั้ง -> เว็บขึ้นด้วยข้อมูลตัวอย่างไปก่อน)
+      # secrets ที่ใช้:
+      #   META_ACCESS_TOKEN   token สิทธิ์ ads_read (แนะนำ System User token)
+      #   META_AD_ACCOUNT_IDS เช่น "act_1111111111, act_2222222222"
+      #   DASHBOARD_USERS     ผู้ใช้ล็อกอิน เช่น "somchai:รหัสผ่าน1,somying:รหัสผ่าน2"
+      #                       (ตั้งไว้ -> ข้อมูลถูกเข้ารหัส เว็บมีหน้าล็อกอิน)
+      - name: Fetch data from Meta Marketing API
+        env:
+          META_ACCESS_TOKEN: ${{ secrets.META_ACCESS_TOKEN }}
+          META_AD_ACCOUNT_IDS: ${{ secrets.META_AD_ACCOUNT_IDS }}
+          DASHBOARD_USERS: ${{ secrets.DASHBOARD_USERS }}
+        run: |
+          if [ -n "$META_ACCESS_TOKEN" ] && [ -n "$META_AD_ACCOUNT_IDS" ]; then
+            node scripts/fetch-data.mjs
+          else
+            echo "ยังไม่ได้ตั้ง secrets META_ACCESS_TOKEN / META_AD_ACCOUNT_IDS — deploy ด้วยข้อมูลตัวอย่าง"
+          fi
+
+      - name: Assemble site
+        run: |
+          mkdir -p _site
+          cp index.html _site/
+          if [ -f data.enc.json ]; then cp data.enc.json _site/; fi
+          if [ -f data.json ]; then cp data.json _site/; fi
+
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - id: deployment
+        uses: actions/deploy-pages@v4
