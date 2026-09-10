@@ -61,6 +61,7 @@
   }
 
   * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
   body {
     margin: 0;
     background: var(--page);
@@ -86,19 +87,51 @@
   /* ---- filter row ---- */
   .filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
   .filters .lbl { font-size: 12px; color: var(--muted); letter-spacing: 0.04em; text-transform: uppercase; margin-right: 4px; }
-  .range-btn {
+  .filters .spacer { flex: 1; }
+  .range-btn, .connect-btn {
     font: inherit; font-size: 13px; font-weight: 500;
     color: var(--ink-2); background: var(--surface);
     border: 1px solid var(--border); border-radius: 8px;
     padding: 5px 14px; cursor: pointer;
   }
-  .range-btn:hover { background: var(--chip-bg); }
+  .range-btn:hover, .connect-btn:hover { background: var(--chip-bg); }
   .range-btn[aria-pressed="true"] {
     color: var(--ink); font-weight: 600;
     border-color: var(--series-1);
     box-shadow: inset 0 0 0 1px var(--series-1);
   }
-  .range-btn:focus-visible, .tbl-btn:focus-visible { outline: 2px solid var(--series-1); outline-offset: 2px; }
+  .range-btn:focus-visible, .tbl-btn:focus-visible, .connect-btn:focus-visible,
+  .conn-form input:focus-visible, .conn-form button:focus-visible {
+    outline: 2px solid var(--series-1); outline-offset: 2px;
+  }
+
+  /* ---- connect panel ---- */
+  .conn-card { border-style: dashed; }
+  .conn-form { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; }
+  .conn-field { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+  .conn-field label { font-size: 12px; color: var(--ink-2); }
+  .conn-field input {
+    font: inherit; font-size: 13px; color: var(--ink);
+    background: var(--page); border: 1px solid var(--border); border-radius: 8px;
+    padding: 6px 10px; min-width: 0;
+  }
+  .conn-field.acct  { flex: 1 1 180px; }
+  .conn-field.token { flex: 2 1 260px; }
+  .conn-form .btn-primary {
+    font: inherit; font-size: 13px; font-weight: 600; color: #fff;
+    background: var(--series-1); border: 1px solid var(--series-1); border-radius: 8px;
+    padding: 6px 16px; cursor: pointer;
+  }
+  .conn-form .btn-ghost {
+    font: inherit; font-size: 13px; color: var(--ink-2);
+    background: none; border: 1px solid var(--border); border-radius: 8px;
+    padding: 6px 12px; cursor: pointer;
+  }
+  .conn-form .btn-ghost:hover { background: var(--chip-bg); }
+  .conn-status { font-size: 12.5px; color: var(--ink-2); min-height: 1.4em; }
+  .conn-status.err { color: var(--down-bad); }
+  .conn-note { font-size: 12px; color: var(--muted); }
+  .conn-note code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px; background: var(--chip-bg); padding: 1px 5px; border-radius: 4px; }
 
   /* ---- KPI tiles ---- */
   .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
@@ -136,6 +169,7 @@
 
   .chart-wrap { position: relative; min-width: 0; }
   .chart-wrap svg { display: block; width: 100%; height: auto; }
+  .loading { opacity: 0.45; pointer-events: none; }
 
   .tooltip {
     position: absolute; pointer-events: none; z-index: 5;
@@ -178,25 +212,55 @@
   footer.page-foot code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11.5px; background: var(--chip-bg); padding: 1px 5px; border-radius: 4px; }
 
   @media (prefers-reduced-motion: no-preference) {
-    .range-btn, .tbl-btn { transition: background 0.12s ease; }
+    .range-btn, .tbl-btn, .connect-btn { transition: background 0.12s ease; }
   }
 </style>
 </head>
 <body>
-
 <div class="wrap">
   <header class="page-head">
     <h1>Meta Ads Report</h1>
     <span class="sub" id="rangeText"></span>
-    <span class="badge-demo">ข้อมูลตัวอย่าง — แทนที่ด้วยข้อมูลจริงได้</span>
+    <span class="badge-demo" id="srcBadge">ข้อมูลตัวอย่าง</span>
   </header>
 
-  <div class="filters" role="group" aria-label="ช่วงเวลา">
-    <span class="lbl">ช่วงเวลา</span>
-    <button class="range-btn" id="btn-r7"  data-days="7">7 วัน</button>
-    <button class="range-btn" id="btn-r30" data-days="30">30 วัน</button>
-    <button class="range-btn" id="btn-r90" data-days="90">90 วัน</button>
+  <div class="filters">
+    <span class="lbl" id="rangeLbl">ช่วงเวลา</span>
+    <span role="group" aria-labelledby="rangeLbl" style="display:contents">
+      <button class="range-btn" id="btn-r7"  data-days="7">7 วัน</button>
+      <button class="range-btn" id="btn-r30" data-days="30">30 วัน</button>
+      <button class="range-btn" id="btn-r90" data-days="90">90 วัน</button>
+    </span>
+    <span class="spacer"></span>
+    <button class="connect-btn" id="connToggle" aria-expanded="false" aria-controls="connPanel">เชื่อมต่อ Meta API</button>
   </div>
+
+  <section class="card conn-card" id="connPanel" hidden>
+    <div class="card-head">
+      <h2>เชื่อมต่อ Meta Marketing API</h2>
+      <span class="desc">ดึงข้อมูลจริงจากบัญชีโฆษณาของคุณ</span>
+    </div>
+    <form class="conn-form" id="connForm">
+      <div class="conn-field acct">
+        <label for="acctInput">Ad Account ID</label>
+        <input id="acctInput" name="acct" placeholder="act_1234567890" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="conn-field token">
+        <label for="tokenInput">Access Token (สิทธิ์ ads_read)</label>
+        <input id="tokenInput" name="token" type="password" placeholder="EAAB..." autocomplete="off">
+      </div>
+      <button class="btn-primary" type="submit" id="connSubmit">ดึงข้อมูล</button>
+      <button class="btn-ghost" type="button" id="useSampleBtn">ใช้ข้อมูลตัวอย่าง</button>
+    </form>
+    <div class="conn-status" id="connStatus" role="status"></div>
+    <div class="conn-note">
+      Token และ Account ID ถูกเก็บไว้ในเบราว์เซอร์เครื่องนี้เท่านั้น ไม่ถูกส่งไปที่อื่นนอกจาก
+      <code>graph.facebook.com</code> — ดูวิธีสร้าง token ได้ใน README ของโปรเจกต์
+      หมายเหตุ: ถ้าเปิดหน้านี้ผ่าน claude.ai (artifact) การเรียก API จะถูกบล็อก
+      ให้เปิดไฟล์ <code>index.html</code> จากเครื่องหรือโฮสต์เป็นเว็บก่อน
+      หรือใช้สคริปต์ <code>node scripts/fetch-data.mjs</code> สร้าง <code>data.json</code> แทน
+    </div>
+  </section>
 
   <section class="tiles" id="tiles" aria-label="ตัวเลขสรุป"></section>
 
@@ -241,19 +305,42 @@
     </div>
   </section>
 
-  <footer class="page-foot">
+  <footer class="page-foot" id="pageFoot">
     ตัวเลขทั้งหมดในหน้านี้เป็นข้อมูลตัวอย่างที่สร้างขึ้นเพื่อแสดงหน้าตาแดชบอร์ด —
-    โครงสร้างข้อมูลตรงกับรายงาน Meta Ads (spend, reach, impressions, clicks, messaging conversations, purchases, revenue)
-    แก้ไขฟังก์ชัน <code>generateSampleData()</code> ในไฟล์นี้เพื่อต่อข้อมูลจริงจาก Ads Manager หรือ API
+    กดปุ่ม "เชื่อมต่อ Meta API" เพื่อดึงข้อมูลจริงจาก Ads Manager
+    หรือรัน <code>node scripts/fetch-data.mjs</code> เพื่อสร้างไฟล์ <code>data.json</code> ให้หน้านี้อ่านอัตโนมัติ
   </footer>
 </div>
 
 <script>
 "use strict";
 
-/* ================= ข้อมูลตัวอย่าง =================
-   แทนที่ generateSampleData() ด้วยข้อมูลจริง: คืน array ของแถวรายวัน
-   { date: Date, spend, impressions, reach, clicks, conversations, purchases, revenue } */
+/* =====================================================================
+   ชั้นข้อมูล — DATA.daily คือแถวรายวันระดับบัญชี, DATA.contentDaily คือ
+   แถวรายวันแยกตามโฆษณา/โพสต์ ทุกแหล่งข้อมูล (ตัวอย่าง / Marketing API /
+   data.json) ถูกแปลงมาเป็นโครงนี้ก่อนเรนเดอร์เสมอ
+   ===================================================================== */
+
+const API_VERSION = "v23.0";
+const ACCOUNT_DAYS = 180;  /* กราฟ + เดลต้าเทียบช่วงก่อนหน้า (90+90) */
+const AD_DAYS = 90;        /* ตารางคอนเท้นต์ครอบคลุมตัวกรองสูงสุด 90 วัน */
+
+/* action_type ของ Meta ที่นับเป็น "คนทักแชทใหม่" และ "การซื้อ" (ตัวแรกที่พบชนะ) */
+const MSG_ACTION_TYPES = [
+  "onsite_conversion.messaging_conversation_started_7d",
+  "onsite_conversion.total_messaging_connection",
+];
+const PURCHASE_ACTION_TYPES = [
+  "omni_purchase",
+  "purchase",
+  "onsite_conversion.purchase",
+  "offsite_conversion.fb_pixel_purchase",
+];
+
+let DATA = null;       /* { daily, contentDaily, source } */
+let rangeDays = 30;
+
+/* ---------------- ข้อมูลตัวอย่าง ---------------- */
 
 function mulberry32(a) {
   return function () {
@@ -264,30 +351,7 @@ function mulberry32(a) {
   };
 }
 
-function generateSampleData() {
-  const rng = mulberry32(20260910);
-  const DAYS = 180;
-  const today = new Date(); today.setHours(0, 0, 0, 0);
-  const rows = [];
-  for (let i = DAYS - 1; i >= 0; i--) {
-    const d = new Date(today); d.setDate(d.getDate() - i);
-    const dow = d.getDay();
-    const weekend = (dow === 0 || dow === 6) ? 1.18 : 1;
-    const trend = 1 + ((DAYS - 1 - i) / DAYS) * 0.4;
-    const spend = Math.round((1700 + rng() * 1300) * weekend * trend);
-    const impressions = Math.round(spend * (8 + rng() * 6));
-    const reach = Math.round(impressions * (0.6 + rng() * 0.14));
-    const clicks = Math.round(impressions * (0.012 + rng() * 0.008));
-    const conversations = Math.round(clicks * (0.18 + rng() * 0.1));
-    const purchases = Math.round(conversations * (0.1 + rng() * 0.08));
-    const revenue = purchases === 0 ? 0 : Math.round(purchases * (520 + rng() * 180));
-    rows.push({ date: d, spend, impressions, reach, clicks, conversations, purchases, revenue });
-  }
-  return rows;
-}
-
-/* คอนเท้นต์: น้ำหนักสัดส่วนของแต่ละชิ้น (แทนที่ด้วยรายการโฆษณาจริงได้) */
-const CONTENT = [
+const SAMPLE_CONTENT = [
   { name: "วิดีโอรีวิวจากลูกค้าจริง",          type: "วิดีโอ",    w: 0.24, msg: 1.30, cvr: 1.30 },
   { name: "ภาพชุดโปรโมชั่นส่งฟรี",             type: "รูปภาพ",   w: 0.17, msg: 1.10, cvr: 1.05 },
   { name: "วิดีโอสาธิตวิธีใช้สินค้า",           type: "วิดีโอ",    w: 0.15, msg: 0.95, cvr: 1.10 },
@@ -298,10 +362,160 @@ const CONTENT = [
   { name: "โพสต์กิจกรรมแจกของรางวัล",          type: "รูปภาพ",   w: 0.05, msg: 1.40, cvr: 0.40 },
 ];
 
-/* ================= helpers ================= */
+/* กระจายยอดรวมตามน้ำหนัก ให้ผลรวมตรงกับยอดรวมพอดี */
+function distribute(total, weights) {
+  const sw = weights.reduce((a, b) => a + b, 0);
+  const out = weights.map(w => Math.round(total * w / sw));
+  const diff = total - out.reduce((a, b) => a + b, 0);
+  out[0] += diff;
+  return out;
+}
 
-const DAILY = generateSampleData();
-let rangeDays = 30;
+function sampleData() {
+  const rng = mulberry32(20260910);
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const daily = [];
+  for (let i = ACCOUNT_DAYS - 1; i >= 0; i--) {
+    const d = new Date(today); d.setDate(d.getDate() - i);
+    const dow = d.getDay();
+    const weekend = (dow === 0 || dow === 6) ? 1.18 : 1;
+    const trend = 1 + ((ACCOUNT_DAYS - 1 - i) / ACCOUNT_DAYS) * 0.4;
+    const spend = Math.round((1700 + rng() * 1300) * weekend * trend);
+    const impressions = Math.round(spend * (8 + rng() * 6));
+    const reach = Math.round(impressions * (0.6 + rng() * 0.14));
+    const clicks = Math.round(impressions * (0.012 + rng() * 0.008));
+    const conversations = Math.round(clicks * (0.18 + rng() * 0.1));
+    const purchases = Math.round(conversations * (0.1 + rng() * 0.08));
+    const revenue = purchases === 0 ? 0 : Math.round(purchases * (520 + rng() * 180));
+    daily.push({ date: d, spend, impressions, reach, clicks, conversations, purchases, revenue });
+  }
+
+  const wBase = SAMPLE_CONTENT.map(c => c.w);
+  const wMsg  = SAMPLE_CONTENT.map(c => c.w * c.msg);
+  const wPur  = SAMPLE_CONTENT.map(c => c.w * c.msg * c.cvr);
+  const contentDaily = [];
+  for (const day of daily) {
+    const spend = distribute(day.spend, wBase);
+    const impressions = distribute(day.impressions, wBase);
+    const reach = distribute(day.reach, wBase);
+    const clicks = distribute(day.clicks, wMsg);
+    const conversations = distribute(day.conversations, wMsg);
+    const purchases = distribute(day.purchases, wPur);
+    const revenue = distribute(day.revenue, wPur);
+    SAMPLE_CONTENT.forEach((c, i) => {
+      contentDaily.push({
+        date: day.date, name: c.name, type: c.type,
+        spend: spend[i], impressions: impressions[i], reach: reach[i], clicks: clicks[i],
+        conversations: conversations[i], purchases: purchases[i], revenue: revenue[i],
+      });
+    });
+  }
+  return { daily, contentDaily, source: "sample" };
+}
+
+/* ---------------- Meta Marketing API ---------------- */
+
+function isoDate(d) {
+  const p = n => String(n).padStart(2, "0");
+  return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate());
+}
+function parseIso(s) {
+  const [y, m, d] = s.split("-").map(Number);
+  return new Date(y, m - 1, d);
+}
+function pickAction(list, types) {
+  for (const t of types) {
+    const hit = (list || []).find(a => a.action_type === t);
+    if (hit && Number(hit.value) > 0) return Number(hit.value);
+  }
+  return 0;
+}
+function mapInsightRow(r) {
+  return {
+    date: parseIso(r.date_start),
+    spend: Math.round(Number(r.spend || 0)),
+    impressions: Number(r.impressions || 0),
+    reach: Number(r.reach || 0),
+    clicks: Number(r.clicks || 0),
+    conversations: pickAction(r.actions, MSG_ACTION_TYPES),
+    purchases: pickAction(r.actions, PURCHASE_ACTION_TYPES),
+    revenue: Math.round(pickAction(r.action_values, PURCHASE_ACTION_TYPES)),
+  };
+}
+
+/* ดึงทุกหน้า (ตาม paging.next) */
+async function fbFetchAll(url) {
+  const rows = [];
+  let next = url, guard = 0;
+  while (next && guard++ < 50) {
+    const res = await fetch(next);
+    const js = await res.json();
+    if (js.error) throw new Error(js.error.message || "Graph API error");
+    rows.push(...(js.data || []));
+    next = js.paging && js.paging.next;
+  }
+  return rows;
+}
+
+async function loadFromMeta(acct, token) {
+  if (!/^act_\d+$/.test(acct)) {
+    if (/^\d+$/.test(acct)) acct = "act_" + acct;
+    else throw new Error("Ad Account ID ต้องอยู่ในรูปแบบ act_1234567890");
+  }
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const range = days => {
+    const since = new Date(today); since.setDate(since.getDate() - (days - 1));
+    return encodeURIComponent(JSON.stringify({ since: isoDate(since), until: isoDate(today) }));
+  };
+  const base = "https://graph.facebook.com/" + API_VERSION + "/" + acct + "/insights";
+  const common = "access_token=" + encodeURIComponent(token) + "&time_increment=1&limit=500";
+
+  const accountRows = await fbFetchAll(base + "?" + common +
+    "&time_range=" + range(ACCOUNT_DAYS) +
+    "&fields=spend,impressions,reach,clicks,actions,action_values");
+  const adRows = await fbFetchAll(base + "?" + common +
+    "&time_range=" + range(AD_DAYS) + "&level=ad" +
+    "&fields=ad_name,spend,impressions,reach,clicks,actions,action_values");
+
+  /* เติมวันที่ไม่มีข้อมูลด้วยศูนย์ ให้กราฟต่อเนื่อง */
+  const byDate = new Map(accountRows.map(r => [r.date_start, mapInsightRow(r)]));
+  const daily = [];
+  for (let i = ACCOUNT_DAYS - 1; i >= 0; i--) {
+    const d = new Date(today); d.setDate(d.getDate() - i);
+    daily.push(byDate.get(isoDate(d)) ||
+      { date: d, spend: 0, impressions: 0, reach: 0, clicks: 0, conversations: 0, purchases: 0, revenue: 0 });
+  }
+
+  const contentDaily = adRows.map(r => ({
+    ...mapInsightRow(r),
+    name: r.ad_name || "(ไม่มีชื่อ)",
+    type: "",
+  }));
+
+  if (daily.every(r => r.spend === 0 && r.impressions === 0)) {
+    throw new Error("ไม่พบข้อมูลโฆษณาในบัญชีนี้ช่วง " + ACCOUNT_DAYS + " วันล่าสุด");
+  }
+  return { daily, contentDaily, source: "meta" };
+}
+
+/* ---------------- data.json (จาก scripts/fetch-data.mjs) ---------------- */
+
+function hydrateJson(js) {
+  if (!js || !Array.isArray(js.daily) || js.daily.length === 0) return null;
+  const num = v => Number(v || 0);
+  const row = r => ({
+    date: parseIso(r.date), spend: num(r.spend), impressions: num(r.impressions),
+    reach: num(r.reach), clicks: num(r.clicks), conversations: num(r.conversations),
+    purchases: num(r.purchases), revenue: num(r.revenue),
+  });
+  return {
+    daily: js.daily.map(row),
+    contentDaily: (js.contentDaily || []).map(r => ({ ...row(r), name: r.name || "(ไม่มีชื่อ)", type: r.type || "" })),
+    source: "file",
+  };
+}
+
+/* ---------------- helpers ---------------- */
 
 const fmtDateShort = new Intl.DateTimeFormat("th-TH", { day: "numeric", month: "short" });
 
@@ -310,19 +524,11 @@ function fmtNum(n) {
   return Math.round(n).toLocaleString("th-TH");
 }
 function fmtBaht(n) { return "฿" + fmtNum(n); }
-
 function sum(rows, key) { return rows.reduce((s, r) => s + r[key], 0); }
-
-function currentRows() { return DAILY.slice(DAILY.length - rangeDays); }
-function previousRows() { return DAILY.slice(DAILY.length - rangeDays * 2, DAILY.length - rangeDays); }
-
-/* กระจายยอดรวมตามน้ำหนัก ให้ผลรวมตรงกับยอดรวมพอดี */
-function distribute(total, weights) {
-  const sw = weights.reduce((a, b) => a + b, 0);
-  const out = weights.map(w => Math.round(total * w / sw));
-  const diff = total - out.reduce((a, b) => a + b, 0);
-  out[0] += diff;
-  return out;
+function currentRows() { return DATA.daily.slice(Math.max(0, DATA.daily.length - rangeDays)); }
+function previousRows() {
+  const end = DATA.daily.length - rangeDays;
+  return end <= 0 ? [] : DATA.daily.slice(Math.max(0, end - rangeDays), end);
 }
 
 function el(tag, attrs, text) {
@@ -342,8 +548,11 @@ function niceMax(v) {
   for (const m of [1, 2, 2.5, 5, 10]) if (v <= m * p) return m * p;
   return 10 * p;
 }
+function cssVar(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
 
-/* ================= KPI tiles ================= */
+/* ---------------- KPI tiles ---------------- */
 
 function deltaSpan(cur, prev, upIsGood) {
   const wrap = el("span");
@@ -385,17 +594,18 @@ function renderTiles() {
   }
 }
 
-/* ================= line chart: ยอดขาย vs ค่าโฆษณา ================= */
+/* ---------------- line chart: ยอดขาย vs ค่าโฆษณา ---------------- */
 
 const SALES_SERIES = [
-  { key: "revenue", name: "ยอดขาย",   color: "var(--series-1)" },
-  { key: "spend",   name: "ค่าโฆษณา", color: "var(--series-2)" },
+  { key: "revenue", name: "ยอดขาย",   colorVar: "--series-1" },
+  { key: "spend",   name: "ค่าโฆษณา", colorVar: "--series-2" },
 ];
 
 function renderLineChart() {
   const host = document.getElementById("salesChart");
   host.replaceChildren();
   const rows = currentRows();
+  if (!rows.length) return;
   const W = Math.max(host.clientWidth || 600, 320), H = 280;
   const padL = 52, padR = 16, padT = 12, padB = 30;
   const plotW = W - padL - padR, plotH = H - padT - padB;
@@ -428,25 +638,25 @@ function renderLineChart() {
 
   for (const s of SALES_SERIES) {
     const d = rows.map((r, i) => (i ? "L" : "M") + x(i).toFixed(1) + " " + y(r[s.key]).toFixed(1)).join(" ");
-    svg.append(svgEl("path", { d, fill: "none", stroke: s.color, "stroke-width": 2,
+    svg.append(svgEl("path", { d, fill: "none", stroke: `var(${s.colorVar})`, "stroke-width": 2,
       "stroke-linejoin": "round", "stroke-linecap": "round" }));
     const last = rows[rows.length - 1];
     svg.append(svgEl("circle", { cx: x(rows.length - 1), cy: y(last[s.key]), r: 4.5,
-      fill: s.color, stroke: "var(--surface)", "stroke-width": 2 }));
+      fill: `var(${s.colorVar})`, stroke: "var(--surface)", "stroke-width": 2 }));
   }
 
   /* crosshair + tooltip */
   const cross = svgEl("line", { y1: padT, y2: padT + plotH, stroke: "var(--baseline)", "stroke-width": 1, visibility: "hidden" });
   svg.append(cross);
   const dots = SALES_SERIES.map(s => {
-    const c = svgEl("circle", { r: 4.5, fill: s.color, stroke: "var(--surface)", "stroke-width": 2, visibility: "hidden" });
+    const c = svgEl("circle", { r: 4.5, fill: `var(${s.colorVar})`, stroke: "var(--surface)", "stroke-width": 2, visibility: "hidden" });
     svg.append(c); return c;
   });
 
   const tip = el("div", { class: "tooltip" });
   host.append(svg, tip);
 
-  function showAt(i, clientX) {
+  function showAt(i) {
     const r = rows[i], px = x(i);
     cross.setAttribute("x1", px); cross.setAttribute("x2", px);
     cross.setAttribute("visibility", "visible");
@@ -458,8 +668,8 @@ function renderLineChart() {
     tip.append(el("div", { class: "tt-date" }, fmtDateShort.format(r.date)));
     for (const s of SALES_SERIES) {
       const row = el("div", { class: "tt-row" });
-      const key = el("span", { class: "tt-key" }); key.style.borderColor =
-        s.color.startsWith("var") ? getComputedStyle(document.documentElement).getPropertyValue(s.color.slice(4, -1)) : s.color;
+      const key = el("span", { class: "tt-key" });
+      key.style.borderColor = cssVar(s.colorVar);
       row.append(key, el("span", { class: "tt-val" }, fmtBaht(r[s.key])), el("span", { class: "tt-name" }, s.name));
       tip.append(row);
     }
@@ -480,7 +690,7 @@ function renderLineChart() {
     const fx = (ev.clientX - rect.left) / rect.width * W;
     const i = Math.max(0, Math.min(rows.length - 1,
       Math.round((fx - padL) / (plotW || 1) * (rows.length - 1))));
-    showAt(i, ev.clientX);
+    showAt(i);
   });
   svg.addEventListener("pointerleave", hide);
 
@@ -503,12 +713,13 @@ function renderLineChart() {
   tblHost.replaceChildren(table);
 }
 
-/* ================= bar chart: การส่งข้อความ ================= */
+/* ---------------- bar chart: การส่งข้อความ ---------------- */
 
 function renderMsgChart() {
   const host = document.getElementById("msgChart");
   host.replaceChildren();
   const rows = currentRows();
+  if (!rows.length) return;
   const W = Math.max(host.clientWidth || 600, 320), H = 240;
   const padL = 44, padR = 16, padT = 12, padB = 30;
   const plotW = W - padL - padR, plotH = H - padT - padB;
@@ -568,7 +779,7 @@ function renderMsgChart() {
     tip.append(el("div", { class: "tt-date" }, fmtDateShort.format(r.date)));
     const row = el("div", { class: "tt-row" });
     const key = el("span", { class: "tt-key" });
-    key.style.borderColor = getComputedStyle(document.documentElement).getPropertyValue("--series-3");
+    key.style.borderColor = cssVar("--series-3");
     row.append(key, el("span", { class: "tt-val" }, fmtNum(r.conversations)), el("span", { class: "tt-name" }, "คนทักแชท"));
     tip.append(row);
     const row2 = el("div", { class: "tt-row" });
@@ -632,32 +843,28 @@ function renderMsgChart() {
   tblHost.replaceChildren(table);
 }
 
-/* ================= content section ================= */
+/* ---------------- content section ---------------- */
 
 function renderContent() {
   const rows = currentRows();
-  const totals = {
-    spend: sum(rows, "spend"), impressions: sum(rows, "impressions"), reach: sum(rows, "reach"),
-    clicks: sum(rows, "clicks"), conversations: sum(rows, "conversations"),
-    purchases: sum(rows, "purchases"), revenue: sum(rows, "revenue"),
-  };
-  const wBase = CONTENT.map(c => c.w);
-  const wMsg  = CONTENT.map(c => c.w * c.msg);
-  const wPur  = CONTENT.map(c => c.w * c.msg * c.cvr);
+  if (!rows.length) return;
+  const rangeStart = rows[0].date;
 
-  const spend = distribute(totals.spend, wBase);
-  const impressions = distribute(totals.impressions, wBase);
-  const reach = distribute(totals.reach, wBase);
-  const clicks = distribute(totals.clicks, wMsg);
-  const conversations = distribute(totals.conversations, wMsg);
-  const purchases = distribute(totals.purchases, wPur);
-  const revenue = distribute(totals.revenue, wPur);
-
-  const items = CONTENT.map((c, i) => ({
-    name: c.name, type: c.type,
-    spend: spend[i], impressions: impressions[i], reach: reach[i], clicks: clicks[i],
-    conversations: conversations[i], purchases: purchases[i], revenue: revenue[i],
-  })).sort((a, b) => b.revenue - a.revenue);
+  /* รวมแถวรายวันของแต่ละคอนเท้นต์ในช่วงที่เลือก */
+  const byName = new Map();
+  for (const r of DATA.contentDaily) {
+    if (r.date < rangeStart) continue;
+    let it = byName.get(r.name);
+    if (!it) {
+      it = { name: r.name, type: r.type, spend: 0, impressions: 0, reach: 0, clicks: 0,
+             conversations: 0, purchases: 0, revenue: 0 };
+      byName.set(r.name, it);
+    }
+    it.spend += r.spend; it.impressions += r.impressions; it.reach += r.reach;
+    it.clicks += r.clicks; it.conversations += r.conversations;
+    it.purchases += r.purchases; it.revenue += r.revenue;
+  }
+  const items = [...byName.values()].sort((a, b) => b.revenue - a.revenue || b.spend - a.spend);
 
   /* horizontal bars: top 5 by revenue */
   const barsHost = document.getElementById("contentBars");
@@ -684,7 +891,7 @@ function renderContent() {
   for (const it of items) {
     const tr = el("tr");
     tr.append(el("td", null, it.name));
-    tr.append(el("td", null, it.type));
+    tr.append(el("td", null, it.type || "—"));
     tr.append(el("td", null, it.reach.toLocaleString("th-TH")));
     tr.append(el("td", null, it.clicks.toLocaleString("th-TH")));
     tr.append(el("td", null, it.conversations.toLocaleString("th-TH")));
@@ -694,20 +901,29 @@ function renderContent() {
     tr.append(el("td", null, it.spend ? (it.revenue / it.spend).toFixed(2) : "—"));
     tbody.append(tr);
   }
-  const cells = trh.children;
-  cells[0].style.textAlign = "left"; cells[1].style.textAlign = "left";
+  trh.children[0].style.textAlign = "left";
+  trh.children[1].style.textAlign = "left";
   table.append(tbody);
   for (const tr of tbody.children) { tr.children[1].style.textAlign = "left"; }
   tblHost.replaceChildren(table);
 }
 
-/* ================= wiring ================= */
+/* ---------------- wiring ---------------- */
+
+const SOURCE_BADGES = {
+  sample: "ข้อมูลตัวอย่าง — แทนที่ด้วยข้อมูลจริงได้",
+  meta:   "ข้อมูลจริงจาก Meta Marketing API",
+  file:   "ข้อมูลจริงจาก data.json",
+};
 
 function renderAll() {
   const rows = currentRows();
+  if (!rows.length) return;
   const first = rows[0].date, last = rows[rows.length - 1].date;
   document.getElementById("rangeText").textContent =
     fmtDateShort.format(first) + " – " + fmtDateShort.format(last) + " (" + rangeDays + " วันล่าสุด)";
+  document.getElementById("srcBadge").textContent = SOURCE_BADGES[DATA.source] || DATA.source;
+  document.getElementById("pageFoot").hidden = DATA.source !== "sample";
   for (const b of document.querySelectorAll(".range-btn"))
     b.setAttribute("aria-pressed", String(Number(b.dataset.days) === rangeDays));
   renderTiles();
@@ -736,10 +952,92 @@ toggleTable("msgTblBtn", "msgTable", "#msgChart");
 let resizeTimer = null;
 window.addEventListener("resize", () => {
   clearTimeout(resizeTimer);
-  resizeTimer = setTimeout(() => { renderLineChart(); renderMsgChart(); }, 150);
+  resizeTimer = setTimeout(() => { if (DATA) { renderLineChart(); renderMsgChart(); } }, 150);
 });
 
-renderAll();
+/* ---------------- connect panel ---------------- */
+
+const LS_KEY = "metaAdsReport.settings";
+function readSettings() {
+  try { return JSON.parse(localStorage.getItem(LS_KEY)) || {}; } catch { return {}; }
+}
+function writeSettings(s) {
+  try { localStorage.setItem(LS_KEY, JSON.stringify(s)); } catch { /* private mode ฯลฯ */ }
+}
+function setStatus(msg, isErr) {
+  const n = document.getElementById("connStatus");
+  n.textContent = msg;
+  n.classList.toggle("err", !!isErr);
+}
+
+const connPanel = document.getElementById("connPanel");
+const connToggle = document.getElementById("connToggle");
+connToggle.addEventListener("click", () => {
+  connPanel.hidden = !connPanel.hidden;
+  connToggle.setAttribute("aria-expanded", String(!connPanel.hidden));
+});
+
+document.getElementById("connForm").addEventListener("submit", async ev => {
+  ev.preventDefault();
+  const acct = document.getElementById("acctInput").value.trim();
+  const token = document.getElementById("tokenInput").value.trim();
+  if (!acct || !token) { setStatus("กรอก Ad Account ID และ Access Token ก่อน", true); return; }
+  const submit = document.getElementById("connSubmit");
+  submit.disabled = true;
+  setStatus("กำลังดึงข้อมูลจาก Meta...");
+  document.querySelectorAll(".chart-wrap").forEach(n => n.classList.add("loading"));
+  try {
+    DATA = await loadFromMeta(acct, token);
+    writeSettings({ acct, token, useMeta: true });
+    setStatus("ดึงข้อมูลสำเร็จ — อัปเดตล่าสุด " + new Date().toLocaleString("th-TH"));
+    renderAll();
+  } catch (e) {
+    let msg = "ดึงข้อมูลไม่สำเร็จ: " + (e && e.message ? e.message : e);
+    if (e instanceof TypeError) {
+      msg += " — ถ้าเปิดหน้านี้บน claude.ai การเรียก API จะถูกบล็อก ให้เปิดไฟล์จากเครื่องหรือโฮสต์เป็นเว็บก่อน";
+    }
+    setStatus(msg, true);
+  } finally {
+    submit.disabled = false;
+    document.querySelectorAll(".chart-wrap").forEach(n => n.classList.remove("loading"));
+  }
+});
+
+document.getElementById("useSampleBtn").addEventListener("click", () => {
+  const s = readSettings(); s.useMeta = false; writeSettings(s);
+  DATA = sampleData();
+  setStatus("กลับมาใช้ข้อมูลตัวอย่างแล้ว");
+  renderAll();
+});
+
+/* ---------------- init ---------------- */
+
+async function init() {
+  const s = readSettings();
+  if (s.acct) document.getElementById("acctInput").value = s.acct;
+  if (s.token) document.getElementById("tokenInput").value = s.token;
+
+  if (s.useMeta && s.acct && s.token) {
+    connPanel.hidden = false;
+    connToggle.setAttribute("aria-expanded", "true");
+    setStatus("กำลังดึงข้อมูลจาก Meta...");
+    try {
+      DATA = await loadFromMeta(s.acct, s.token);
+      setStatus("ดึงข้อมูลสำเร็จ — อัปเดตล่าสุด " + new Date().toLocaleString("th-TH"));
+    } catch (e) {
+      setStatus("ดึงข้อมูลไม่สำเร็จ: " + (e && e.message ? e.message : e), true);
+    }
+  }
+  if (!DATA) {
+    try {
+      const res = await fetch("data.json", { cache: "no-store" });
+      if (res.ok) DATA = hydrateJson(await res.json());
+    } catch { /* ไม่มี data.json หรือเปิดแบบ file:// — ใช้ข้อมูลตัวอย่างต่อ */ }
+  }
+  if (!DATA) DATA = sampleData();
+  renderAll();
+}
+init();
 </script>
 </body>
 </html>
