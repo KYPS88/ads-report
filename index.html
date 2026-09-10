@@ -140,6 +140,20 @@
   .conn-status.err { color: var(--down-bad); }
   .conn-note { font-size: 12px; color: var(--muted); }
   .conn-note code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px; background: var(--chip-bg); padding: 1px 5px; border-radius: 4px; }
+  .csv-import { border-top: 1px solid var(--grid); padding-top: 12px; display: flex; flex-direction: column; gap: 8px; }
+  .csv-head { font-size: 13.5px; font-weight: 600; }
+  .csv-tag {
+    font-size: 11px; font-weight: 600; color: var(--series-3);
+    border: 1px solid currentColor; border-radius: 999px; padding: 1px 8px; margin-left: 6px;
+  }
+  .csv-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  .csv-row input[type="file"] { font: inherit; font-size: 12.5px; color: var(--ink-2); max-width: 100%; }
+  .csv-row .btn-ghost {
+    font: inherit; font-size: 12.5px; color: var(--ink-2);
+    background: none; border: 1px solid var(--border); border-radius: 8px;
+    padding: 5px 12px; cursor: pointer;
+  }
+  .csv-row .btn-ghost:hover { background: var(--chip-bg); }
 
   /* ---- KPI tiles ---- */
   .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
@@ -320,6 +334,21 @@
       หมายเหตุ: ถ้าเปิดหน้านี้ผ่าน claude.ai (artifact) การเรียก API จะถูกบล็อก
       ให้เปิดไฟล์ <code>index.html</code> จากเครื่องหรือโฮสต์เป็นเว็บก่อน
       หรือใช้สคริปต์ <code>node scripts/fetch-data.mjs</code> สร้าง <code>data.json</code> แทน
+    </div>
+
+    <div class="csv-import">
+      <div class="csv-head">หรือ นำเข้าไฟล์ CSV จาก Ads Manager <span class="csv-tag">ไม่ต้องใช้ token</span></div>
+      <div class="conn-note">
+        Export รายงานจาก Ads Manager เป็น .csv โดยแยกรายวัน (Breakdown → By time → Day)
+        ที่ระดับโฆษณา และมีคอลัมน์: วัน, ชื่อโฆษณา, จำนวนเงินที่ใช้จ่ายไป, การแสดงผล, การเข้าถึง,
+        การคลิกลิงก์, การเริ่มการสนทนาผ่านข้อความ, การซื้อ, มูลค่าคอนเวอร์ชั่นจากการซื้อ
+        (หัวตารางภาษาอังกฤษก็ได้ ระบบตรวจจับให้อัตโนมัติ) — ข้อมูลอยู่ในเครื่องนี้เท่านั้น ไม่ถูกส่งไปไหน
+      </div>
+      <div class="csv-row">
+        <input type="file" id="csvFile" accept=".csv,text/csv">
+        <button class="btn-ghost" type="button" id="csvClearBtn" hidden>ล้างข้อมูลที่นำเข้า</button>
+      </div>
+      <div class="conn-status" id="csvStatus" role="status"></div>
     </div>
   </section>
 
@@ -663,6 +692,128 @@ async function unlockWithPassword(username, password) {
     { name: "PBKDF2", salt: b64ToBytes(u.salt), iterations, hash: "SHA-256" },
     km, { name: "AES-GCM", length: 256 }, false, ["decrypt"]);
   return crypto.subtle.decrypt({ name: "AES-GCM", iv: b64ToBytes(u.iv) }, kek, b64ToBytes(u.wrappedKey));
+}
+
+/* ---------------- นำเข้า CSV จาก Ads Manager ---------------- */
+
+const CSV_KEY = "metaAdsReport.csvData";
+
+/* ตัวแยก CSV: รองรับค่าที่ครอบด้วยเครื่องหมายคำพูดและมีจุลภาค/บรรทัดใหม่ข้างใน */
+function parseCsv(text) {
+  const rows = [];
+  let row = [], cell = "", inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') { cell += '"'; i++; }
+        else inQuotes = false;
+      } else cell += ch;
+    } else if (ch === '"') inQuotes = true;
+    else if (ch === ",") { row.push(cell); cell = ""; }
+    else if (ch === "\n" || ch === "\r") {
+      if (ch === "\r" && text[i + 1] === "\n") i++;
+      row.push(cell); cell = "";
+      if (row.some(c => c.trim() !== "")) rows.push(row);
+      row = [];
+    } else cell += ch;
+  }
+  row.push(cell);
+  if (row.some(c => c.trim() !== "")) rows.push(row);
+  return rows;
+}
+
+function csvNum(s) {
+  if (s == null) return 0;
+  const n = parseFloat(String(s).replace(/[",฿\s]/g, "").replace(/,/g, ""));
+  return Number.isFinite(n) ? n : 0;
+}
+function csvDate(s) {
+  s = String(s || "").trim();
+  let m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return m[1] + "-" + m[2] + "-" + m[3];
+  m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);   /* dd/mm/yyyy */
+  if (m) return m[3] + "-" + m[2].padStart(2, "0") + "-" + m[1].padStart(2, "0");
+  return null;
+}
+
+/* หาคอลัมน์จากหัวตาราง รองรับทั้งไทยและอังกฤษ */
+function findCsvColumns(headers) {
+  const h = headers.map(x => String(x).replace(/^\uFEFF/, "").trim().toLowerCase());
+  const idx = pred => h.findIndex(pred);
+  const noCost = x => !/ต้นทุน|cost|ต่อ|per |ctr|อัตรา|rate|%/.test(x);
+  return {
+    date: (() => {
+      let i = idx(x => x === "วัน" || x === "day");
+      if (i < 0) i = idx(x => x.includes("วันที่เริ่มต้น") || x.includes("reporting starts"));
+      return i;
+    })(),
+    adName: idx(x => x.includes("ชื่อโฆษณา") || x.includes("ad name")),
+    spend: idx(x => (x.includes("ใช้จ่าย") || x.includes("amount spent") || x === "spend") && noCost(x)),
+    impressions: idx(x => (x.includes("การแสดงผล") || x.includes("impression")) && noCost(x)),
+    reach: idx(x => (x.includes("การเข้าถึง") || x.includes("reach")) && noCost(x)),
+    clicks: (() => {
+      let i = idx(x => (x.includes("การคลิกลิงก์") || x.includes("link click")) && noCost(x));
+      if (i < 0) i = idx(x => (x.includes("คลิก") || x.includes("click")) && noCost(x));
+      return i;
+    })(),
+    conversations: idx(x => (x.includes("การสนทนา") || x.includes("messaging conversation")) && noCost(x)),
+    purchases: idx(x => /ซื้อ|purchase/.test(x) && !/มูลค่า|value/.test(x) && noCost(x)),
+    revenue: idx(x => /ซื้อ|purchase/.test(x) && /มูลค่า|value/.test(x)),
+  };
+}
+
+/* แปลงเนื้อไฟล์ CSV เป็น payload {daily, contentDaily} */
+function importCsvText(text) {
+  const rows = parseCsv(text.replace(/^\uFEFF/, ""));
+  if (rows.length < 2) throw new Error("ไฟล์ว่างหรืออ่านไม่ได้");
+  const col = findCsvColumns(rows[0]);
+  if (col.date < 0) throw new Error('ไม่พบคอลัมน์วันที่ — ตอน export ให้เลือก Breakdown แยกรายวัน (คอลัมน์ "วัน" / "Day")');
+  if (col.spend < 0) throw new Error('ไม่พบคอลัมน์จำนวนเงินที่ใช้จ่าย (Amount spent)');
+
+  const dayMap = new Map();
+  const contentDaily = [];
+  const get = (r, i) => i >= 0 ? r[i] : "";
+  for (let ri = 1; ri < rows.length; ri++) {
+    const r = rows[ri];
+    const date = csvDate(get(r, col.date));
+    if (!date) continue;
+    const rec = {
+      spend: Math.round(csvNum(get(r, col.spend))),
+      impressions: Math.round(csvNum(get(r, col.impressions))),
+      reach: Math.round(csvNum(get(r, col.reach))),
+      clicks: Math.round(csvNum(get(r, col.clicks))),
+      conversations: Math.round(csvNum(get(r, col.conversations))),
+      purchases: Math.round(csvNum(get(r, col.purchases))),
+      revenue: Math.round(csvNum(get(r, col.revenue))),
+    };
+    let d = dayMap.get(date);
+    if (!d) { d = { date, spend: 0, impressions: 0, reach: 0, clicks: 0, conversations: 0, purchases: 0, revenue: 0 }; dayMap.set(date, d); }
+    for (const k of ["spend", "impressions", "reach", "clicks", "conversations", "purchases", "revenue"]) d[k] += rec[k];
+    const name = String(get(r, col.adName) || "").trim();
+    if (name) contentDaily.push({ ...rec, date, name, type: "" });
+  }
+  if (!dayMap.size) throw new Error("อ่านวันที่ในไฟล์ไม่ได้เลย — เช็คว่ามีคอลัมน์วันและมีข้อมูลจริง");
+
+  /* เติมวันที่หายไปด้วยศูนย์ ให้กราฟต่อเนื่อง */
+  const dates = [...dayMap.keys()].sort();
+  const daily = [];
+  const cur = parseIso(dates[0]), last = parseIso(dates[dates.length - 1]);
+  while (cur <= last) {
+    const key = cur.getFullYear() + "-" + String(cur.getMonth() + 1).padStart(2, "0") + "-" + String(cur.getDate()).padStart(2, "0");
+    daily.push(dayMap.get(key) ||
+      { date: key, spend: 0, impressions: 0, reach: 0, clicks: 0, conversations: 0, purchases: 0, revenue: 0 });
+    cur.setDate(cur.getDate() + 1);
+  }
+  return { daily, contentDaily };
+}
+
+async function readFileText(file) {
+  const buf = await file.arrayBuffer();
+  const bytes = new Uint8Array(buf);
+  if (bytes[0] === 0xFF && bytes[1] === 0xFE) return new TextDecoder("utf-16le").decode(buf);
+  if (bytes[0] === 0xFE && bytes[1] === 0xFF) return new TextDecoder("utf-16be").decode(buf);
+  return new TextDecoder("utf-8").decode(buf);
 }
 
 /* ---------------- helpers ---------------- */
@@ -1064,6 +1215,7 @@ const SOURCE_BADGES = {
   sample: "ข้อมูลตัวอย่าง — แทนที่ด้วยข้อมูลจริงได้",
   meta:   "ข้อมูลจริงจาก Meta Marketing API",
   file:   "ข้อมูลจริง — อัปเดตจากระบบอัตโนมัติ",
+  csv:    "ข้อมูลจริงจากไฟล์ Ads Manager",
 };
 
 function renderAll() {
@@ -1195,8 +1347,45 @@ document.getElementById("connForm").addEventListener("submit", async ev => {
 
 document.getElementById("useSampleBtn").addEventListener("click", () => {
   const s = readSettings(); s.useMeta = false; writeSettings(s);
-  DATA = sampleData();
+  DATA = sampleData(); ACCOUNTS = null;
   setStatus("กลับมาใช้ข้อมูลตัวอย่างแล้ว");
+  renderAll();
+});
+
+/* ---- นำเข้าไฟล์ CSV ---- */
+
+function setCsvStatus(msg, isErr) {
+  const n = document.getElementById("csvStatus");
+  n.textContent = msg;
+  n.classList.toggle("err", !!isErr);
+}
+
+document.getElementById("csvFile").addEventListener("change", async ev => {
+  const file = ev.target.files && ev.target.files[0];
+  if (!file) return;
+  try {
+    const payload = importCsvText(await readFileText(file));
+    if (!applyPayload(payload, "csv", null)) throw new Error("แปลงข้อมูลไม่สำเร็จ");
+    const meta = { importedAt: new Date().toISOString(), fileName: file.name, payload };
+    try { localStorage.setItem(CSV_KEY, JSON.stringify(meta)); }
+    catch { setCsvStatus("นำเข้าสำเร็จ แต่ไฟล์ใหญ่เกินกว่าจะจำไว้ในเครื่อง — ข้อมูลจะหายเมื่อรีเฟรชหน้า", true); }
+    document.getElementById("csvClearBtn").hidden = false;
+    const days = payload.daily.length;
+    const ads = new Set(payload.contentDaily.map(r => r.name)).size;
+    setCsvStatus(`นำเข้า "${file.name}" สำเร็จ — ${days} วัน, ${ads} โฆษณา`);
+    renderAll();
+  } catch (e) {
+    setCsvStatus("นำเข้าไม่สำเร็จ: " + (e && e.message ? e.message : e), true);
+  } finally {
+    ev.target.value = "";
+  }
+});
+
+document.getElementById("csvClearBtn").addEventListener("click", () => {
+  try { localStorage.removeItem(CSV_KEY); } catch {}
+  document.getElementById("csvClearBtn").hidden = true;
+  DATA = sampleData(); ACCOUNTS = null;
+  setCsvStatus("ล้างข้อมูลที่นำเข้าแล้ว — กลับมาใช้ข้อมูลตัวอย่าง");
   renderAll();
 });
 
@@ -1289,6 +1478,16 @@ async function init() {
     } catch (e) {
       setStatus("ดึงข้อมูลไม่สำเร็จ: " + (e && e.message ? e.message : e), true);
     }
+  }
+  if (!DATA) {
+    /* ข้อมูล CSV ที่เคยนำเข้าไว้ในเครื่องนี้ */
+    try {
+      const saved = JSON.parse(localStorage.getItem(CSV_KEY));
+      if (saved && saved.payload && applyPayload(saved.payload, "csv", null)) {
+        document.getElementById("csvClearBtn").hidden = false;
+        setCsvStatus(`ใช้ข้อมูลที่นำเข้าไว้ (${saved.fileName || "CSV"} — ${new Date(saved.importedAt).toLocaleString("th-TH")})`);
+      }
+    } catch { /* ไม่มีหรืออ่านไม่ได้ */ }
   }
   if (!DATA) {
     try {
