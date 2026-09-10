@@ -216,6 +216,36 @@
   .mini .m-label { font-size: 12px; color: var(--ink-2); }
   .mini .m-value { font-size: 20px; font-weight: 600; }
 
+  /* ---- login overlay ---- */
+  .login-overlay {
+    position: fixed; inset: 0; z-index: 50;
+    background: var(--page);
+    display: flex; align-items: center; justify-content: center;
+    padding: 20px;
+  }
+  .login-card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+    padding: 28px 26px; width: 100%; max-width: 360px;
+    display: flex; flex-direction: column; gap: 14px;
+  }
+  .login-card h2 { margin: 0; font-size: 18px; font-weight: 700; }
+  .login-card .l-desc { font-size: 13px; color: var(--ink-2); margin-top: -8px; }
+  .login-card .conn-field input { width: 100%; }
+  .login-card .btn-primary {
+    font: inherit; font-size: 14px; font-weight: 600; color: #fff;
+    background: var(--series-1); border: 1px solid var(--series-1); border-radius: 8px;
+    padding: 8px 16px; cursor: pointer;
+  }
+  .login-card .btn-ghost {
+    font: inherit; font-size: 12.5px; color: var(--muted);
+    background: none; border: none; cursor: pointer; text-decoration: underline;
+    padding: 0; align-self: center;
+  }
+  .login-err { color: var(--down-bad); font-size: 12.5px; min-height: 1.3em; text-align: center; }
+  .login-card input:focus-visible, .login-card button:focus-visible {
+    outline: 2px solid var(--series-1); outline-offset: 2px;
+  }
+
   footer.page-foot { color: var(--muted); font-size: 12px; }
   footer.page-foot code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11.5px; background: var(--chip-bg); padding: 1px 5px; border-radius: 4px; }
 
@@ -225,6 +255,24 @@
 </style>
 </head>
 <body>
+<div class="login-overlay" id="loginOverlay" hidden>
+  <form class="login-card" id="loginForm">
+    <h2>Meta Ads Report</h2>
+    <div class="l-desc">เข้าสู่ระบบเพื่อดูรายงาน</div>
+    <div class="conn-field">
+      <label for="loginUser">ชื่อผู้ใช้</label>
+      <input id="loginUser" name="username" autocomplete="username" spellcheck="false">
+    </div>
+    <div class="conn-field">
+      <label for="loginPass">รหัสผ่าน</label>
+      <input id="loginPass" name="password" type="password" autocomplete="current-password">
+    </div>
+    <button class="btn-primary" type="submit" id="loginSubmit">เข้าสู่ระบบ</button>
+    <div class="login-err" id="loginErr" role="alert"></div>
+    <button class="btn-ghost" type="button" id="loginSampleBtn">ดูหน้าตาแดชบอร์ดด้วยข้อมูลตัวอย่างแทน</button>
+  </form>
+</div>
+
 <div class="wrap">
   <header class="page-head">
     <h1>Meta Ads Report</h1>
@@ -245,6 +293,7 @@
     </span>
     <span class="spacer"></span>
     <button class="connect-btn" id="connToggle" aria-expanded="false" aria-controls="connPanel">เชื่อมต่อ Meta API</button>
+    <button class="connect-btn" id="logoutBtn" hidden>ออกจากระบบ</button>
   </div>
 
   <section class="card conn-card" id="connPanel" hidden>
@@ -549,9 +598,9 @@ async function loadAccounts(ids, token) {
   return { accounts, failed };
 }
 
-/* ---------------- data.json (จาก scripts/fetch-data.mjs) ---------------- */
+/* ---------------- data.json / data.enc.json (จาก scripts/fetch-data.mjs) ---------------- */
 
-function hydrateJson(js) {
+function hydrateRows(js) {
   if (!js || !Array.isArray(js.daily) || js.daily.length === 0) return null;
   const num = v => Number(v || 0);
   const row = r => ({
@@ -562,8 +611,58 @@ function hydrateJson(js) {
   return {
     daily: js.daily.map(row),
     contentDaily: (js.contentDaily || []).map(r => ({ ...row(r), name: r.name || "(ไม่มีชื่อ)", type: r.type || "" })),
-    source: "file",
   };
+}
+
+/* รับได้ทั้ง v2 (หลายบัญชี: {version:2, accounts:[...]}) และ v1 ({daily, contentDaily}) */
+function applyPayload(js, source, savedSelected) {
+  if (js && js.version === 2 && Array.isArray(js.accounts) && js.accounts.length) {
+    const map = new Map();
+    for (const a of js.accounts) {
+      const d = hydrateRows(a);
+      if (d) {
+        const id = a.id || a.name;
+        map.set(id, { id, name: a.name || id, data: { ...d, source } });
+      }
+    }
+    if (!map.size) return false;
+    ACCOUNTS = map;
+    selectedAcct = (savedSelected && map.has(savedSelected)) ? savedSelected : map.keys().next().value;
+    DATA = map.get(selectedAcct).data;
+    return true;
+  }
+  const d = hydrateRows(js);
+  if (!d) return false;
+  ACCOUNTS = null;
+  DATA = { ...d, source };
+  return true;
+}
+
+/* ---------------- ถอดรหัส data.enc.json (โหมดล็อกอิน) ---------------- */
+
+let ENC = null;  /* เนื้อหา data.enc.json เมื่อเว็บถูก deploy แบบมีล็อกอิน */
+const SESSION_KEY = "metaAdsReport.session";
+const TE = new TextEncoder(), TD = new TextDecoder();
+const b64ToBytes = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+const bytesToB64 = b => btoa(String.fromCharCode(...new Uint8Array(b)));
+
+async function decryptPayloadWithKey(rawKey) {
+  const key = await crypto.subtle.importKey("raw", rawKey, "AES-GCM", false, ["decrypt"]);
+  const pt = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: b64ToBytes(ENC.iv) }, key, b64ToBytes(ENC.ciphertext));
+  return JSON.parse(TD.decode(pt));
+}
+
+/* ห่อกุญแจหลักไว้ด้วยรหัสผ่านของแต่ละผู้ใช้ (PBKDF2 + AES-GCM) — รหัสผิดจะถอดไม่ผ่าน */
+async function unlockWithPassword(username, password) {
+  const u = (ENC.users || []).find(x => x.username === username);
+  if (!u) throw new Error("ไม่พบผู้ใช้");
+  const iterations = (ENC.kdf && ENC.kdf.iterations) || 310000;
+  const km = await crypto.subtle.importKey("raw", TE.encode(password), "PBKDF2", false, ["deriveKey"]);
+  const kek = await crypto.subtle.deriveKey(
+    { name: "PBKDF2", salt: b64ToBytes(u.salt), iterations, hash: "SHA-256" },
+    km, { name: "AES-GCM", length: 256 }, false, ["decrypt"]);
+  return crypto.subtle.decrypt({ name: "AES-GCM", iv: b64ToBytes(u.iv) }, kek, b64ToBytes(u.wrappedKey));
 }
 
 /* ---------------- helpers ---------------- */
@@ -964,7 +1063,7 @@ function renderContent() {
 const SOURCE_BADGES = {
   sample: "ข้อมูลตัวอย่าง — แทนที่ด้วยข้อมูลจริงได้",
   meta:   "ข้อมูลจริงจาก Meta Marketing API",
-  file:   "ข้อมูลจริงจาก data.json",
+  file:   "ข้อมูลจริง — อัปเดตจากระบบอัตโนมัติ",
 };
 
 function renderAll() {
@@ -993,7 +1092,7 @@ for (const b of document.querySelectorAll(".range-btn")) {
 function updateAcctSwitch() {
   const wrap = document.getElementById("acctSwitch");
   const sel = document.getElementById("acctSelect");
-  const show = DATA.source === "meta" && ACCOUNTS && ACCOUNTS.size > 1;
+  const show = ACCOUNTS && ACCOUNTS.size > 1 && (DATA.source === "meta" || DATA.source === "file");
   wrap.hidden = !show;
   if (!show) return;
   sel.replaceChildren();
@@ -1101,6 +1200,54 @@ document.getElementById("useSampleBtn").addEventListener("click", () => {
   renderAll();
 });
 
+/* ---------------- login (โหมด data.enc.json) ---------------- */
+
+function enterLoggedIn() {
+  document.getElementById("loginOverlay").hidden = true;
+  document.getElementById("logoutBtn").hidden = false;
+  document.getElementById("connToggle").hidden = true;
+  renderAll();
+}
+
+document.getElementById("loginForm").addEventListener("submit", async ev => {
+  ev.preventDefault();
+  const user = document.getElementById("loginUser").value.trim();
+  const pass = document.getElementById("loginPass").value;
+  const err = document.getElementById("loginErr");
+  const submit = document.getElementById("loginSubmit");
+  err.textContent = "";
+  if (!user || !pass) { err.textContent = "กรอกชื่อผู้ใช้และรหัสผ่านก่อน"; return; }
+  submit.disabled = true;
+  try {
+    const rawKey = await unlockWithPassword(user, pass);
+    const payload = await decryptPayloadWithKey(rawKey);
+    const s = readSettings();
+    if (!applyPayload(payload, "file", s.selected)) throw new Error("ข้อมูลไม่ถูกต้อง");
+    try { localStorage.setItem(SESSION_KEY, JSON.stringify({ u: user, k: bytesToB64(rawKey) })); } catch {}
+    enterLoggedIn();
+  } catch {
+    err.textContent = "ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง";
+  } finally {
+    submit.disabled = false;
+  }
+});
+
+document.getElementById("loginSampleBtn").addEventListener("click", () => {
+  DATA = sampleData(); ACCOUNTS = null;
+  document.getElementById("loginOverlay").hidden = true;
+  renderAll();
+});
+
+document.getElementById("logoutBtn").addEventListener("click", () => {
+  try { localStorage.removeItem(SESSION_KEY); } catch {}
+  ACCOUNTS = null;
+  DATA = sampleData();
+  document.getElementById("logoutBtn").hidden = true;
+  document.getElementById("loginPass").value = "";
+  document.getElementById("loginOverlay").hidden = false;
+  renderAll();
+});
+
 /* ---------------- init ---------------- */
 
 async function init() {
@@ -1108,6 +1255,31 @@ async function init() {
   const savedAccts = s.accts || s.acct || "";  /* s.acct = รูปแบบเก่า (บัญชีเดียว) */
   if (savedAccts) document.getElementById("acctInput").value = savedAccts;
   if (s.token) document.getElementById("tokenInput").value = s.token;
+
+  /* โหมดเว็บที่มีล็อกอิน: มีไฟล์ data.enc.json อยู่ข้างหน้าเว็บ */
+  try {
+    const res = await fetch("data.enc.json", { cache: "no-store" });
+    if (res.ok) {
+      const js = await res.json();
+      if (js && js.encrypted && Array.isArray(js.users) && js.ciphertext) ENC = js;
+    }
+  } catch { /* ไม่มีไฟล์ หรือเปิดแบบ file:// */ }
+
+  if (ENC) {
+    document.getElementById("connToggle").hidden = true;
+    let sess = null;
+    try { sess = JSON.parse(localStorage.getItem(SESSION_KEY)); } catch {}
+    if (sess && sess.k) {
+      try {
+        const payload = await decryptPayloadWithKey(b64ToBytes(sess.k));
+        if (applyPayload(payload, "file", s.selected)) { enterLoggedIn(); return; }
+      } catch { try { localStorage.removeItem(SESSION_KEY); } catch {} }
+    }
+    DATA = sampleData();
+    document.getElementById("loginOverlay").hidden = false;
+    renderAll();
+    return;
+  }
 
   if (s.useMeta && savedAccts && s.token) {
     connPanel.hidden = false;
@@ -1121,7 +1293,7 @@ async function init() {
   if (!DATA) {
     try {
       const res = await fetch("data.json", { cache: "no-store" });
-      if (res.ok) DATA = hydrateJson(await res.json());
+      if (res.ok) applyPayload(await res.json(), "file", s.selected);
     } catch { /* ไม่มี data.json หรือเปิดแบบ file:// — ใช้ข้อมูลตัวอย่างต่อ */ }
   }
   if (!DATA) DATA = sampleData();
