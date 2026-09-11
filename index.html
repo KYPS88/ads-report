@@ -149,7 +149,14 @@
   }
   .conn-field.acct  { flex: 1 1 180px; }
   .conn-field.token { flex: 2 1 260px; }
-  .conn-form .btn-primary {
+  .url-input {
+    flex: 1 1 240px; min-width: 0;
+    font: inherit; font-size: 12.5px; color: var(--ink);
+    background: var(--page); border: 1px solid var(--border); border-radius: 8px;
+    padding: 6px 10px;
+  }
+  .url-input:focus-visible { outline: 2px solid var(--series-1); outline-offset: 2px; }
+  .conn-form .btn-primary, .csv-row .btn-primary {
     font: inherit; font-size: 13px; font-weight: 600; color: #fff;
     background: var(--series-1); border: 1px solid var(--series-1); border-radius: 8px;
     padding: 6px 16px; cursor: pointer;
@@ -397,6 +404,24 @@
         <button class="btn-ghost" type="button" id="csvClearBtn" hidden>ล้างข้อมูลที่นำเข้า</button>
       </div>
       <div class="conn-status" id="csvStatus" role="status"></div>
+    </div>
+
+    <div class="csv-import">
+      <div class="csv-head">หรือ ดึงจากลิงก์อัตโนมัติ (Google Sheet / CSV / JSON)
+        <span class="csv-tag">สำหรับต่อกับ Make.com</span></div>
+      <div class="conn-note">
+        วางลิงก์ CSV ที่เผยแพร่จาก Google Sheet (ไฟล์ → แชร์ → เผยแพร่ไปยังเว็บ → เลือก .csv)
+        ระบบจะจำลิงก์ไว้และโหลดข้อมูลใหม่ทุกครั้งที่เปิดหน้านี้ —
+        ให้ Make.com เป็นคนอัปเดตข้อมูลลง Sheet ตามรอบเวลา แดชบอร์ดก็สดเสมอโดยไม่ต้องทำอะไร
+        แชร์ให้เพื่อนได้โดยเติม <code>?data=ลิงก์</code> ต่อท้าย URL ของแดชบอร์ด
+      </div>
+      <div class="csv-row">
+        <input type="url" class="url-input" id="urlInput" spellcheck="false"
+          placeholder="https://docs.google.com/spreadsheets/d/e/.../pub?output=csv">
+        <button class="btn-primary" type="button" id="urlLoadBtn">โหลด</button>
+        <button class="btn-ghost" type="button" id="urlClearBtn" hidden>เลิกใช้ลิงก์นี้</button>
+      </div>
+      <div class="conn-status" id="urlStatus" role="status"></div>
     </div>
   </section>
 
@@ -1385,6 +1410,7 @@ const SOURCE_BADGES = {
   meta:   "ข้อมูลจริงจาก Meta Marketing API",
   file:   "ข้อมูลจริง — อัปเดตจากระบบอัตโนมัติ",
   csv:    "ข้อมูลจริงจากไฟล์ Ads Manager",
+  url:    "ข้อมูลจริงจากลิงก์ — โหลดใหม่ทุกครั้งที่เปิด",
 };
 
 function renderAll() {
@@ -1559,6 +1585,73 @@ document.getElementById("csvClearBtn").addEventListener("click", () => {
   renderAll();
 });
 
+/* ---- ดึงข้อมูลจากลิงก์ (Google Sheet CSV / JSON ที่ Make.com ฯลฯ อัปเดตให้) ---- */
+
+const URL_KEY = "metaAdsReport.urlData";
+
+function setUrlStatus(msg, isErr) {
+  const n = document.getElementById("urlStatus");
+  n.textContent = msg;
+  n.classList.toggle("err", !!isErr);
+}
+
+async function loadFromUrl(url) {
+  setUrlStatus("กำลังโหลดข้อมูลจากลิงก์...");
+  const res = await fetch(url, { cache: "no-store" });
+  if (!res.ok) throw new Error("HTTP " + res.status);
+  const text = await res.text();
+  const t = text.trim();
+  const s = readSettings();
+  let payloadToCache, ok;
+  if (t.startsWith("{") || t.startsWith("[")) {
+    const js = JSON.parse(t);
+    ok = applyPayload(js, "url", s.selected);
+    payloadToCache = js;
+  } else {
+    const payload = importCsvText(text);
+    ok = applyPayload(payload, "url", null);
+    payloadToCache = payload;
+  }
+  if (!ok) throw new Error("รูปแบบข้อมูลในลิงก์ไม่ถูกต้อง");
+  try {
+    localStorage.setItem(URL_KEY, JSON.stringify({ url, importedAt: new Date().toISOString(), payload: payloadToCache }));
+  } catch { /* ข้อมูลใหญ่เกิน localStorage — ใช้แบบไม่แคชต่อ */ }
+  document.getElementById("urlClearBtn").hidden = false;
+  setUrlStatus("โหลดสำเร็จ — อัปเดตล่าสุด " + new Date().toLocaleString("th-TH"));
+}
+
+function urlErrMsg(e) {
+  let msg = e && e.message ? e.message : String(e);
+  if (e instanceof TypeError) {
+    msg += " — ลิงก์ต้องเปิดจากไฟล์ในเครื่องหรือเว็บที่โฮสต์แล้ว (บน claude.ai การโหลดลิงก์ภายนอกถูกบล็อก) และ Google Sheet ต้อง 'เผยแพร่ไปยังเว็บ' แล้ว";
+  }
+  return msg;
+}
+
+document.getElementById("urlLoadBtn").addEventListener("click", async () => {
+  const url = document.getElementById("urlInput").value.trim();
+  if (!url) { setUrlStatus("วางลิงก์ก่อน", true); return; }
+  const btn = document.getElementById("urlLoadBtn");
+  btn.disabled = true;
+  try {
+    await loadFromUrl(url);
+    renderAll();
+  } catch (e) {
+    setUrlStatus("โหลดไม่สำเร็จ: " + urlErrMsg(e), true);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+document.getElementById("urlClearBtn").addEventListener("click", () => {
+  try { localStorage.removeItem(URL_KEY); } catch {}
+  document.getElementById("urlClearBtn").hidden = true;
+  document.getElementById("urlInput").value = "";
+  DATA = sampleData(); ACCOUNTS = null;
+  setUrlStatus("เลิกใช้ลิงก์แล้ว — กลับมาใช้ข้อมูลตัวอย่าง");
+  renderAll();
+});
+
 /* ---------------- login (โหมด data.enc.json) ---------------- */
 
 function enterLoggedIn() {
@@ -1640,7 +1733,28 @@ async function init() {
     return;
   }
 
-  if (s.useMeta && savedAccts && s.token) {
+  /* ลิงก์ข้อมูลอัตโนมัติ: จาก ?data=... ใน URL หรือลิงก์ที่จำไว้ */
+  let savedUrlRec = null;
+  try { savedUrlRec = JSON.parse(localStorage.getItem(URL_KEY)); } catch {}
+  const qsData = new URLSearchParams(location.search).get("data");
+  const dataUrl = qsData || (savedUrlRec && savedUrlRec.url);
+  if (!DATA && dataUrl) {
+    document.getElementById("urlInput").value = dataUrl;
+    try {
+      await loadFromUrl(dataUrl);
+    } catch (e) {
+      if (savedUrlRec && savedUrlRec.payload && savedUrlRec.url === dataUrl &&
+          applyPayload(savedUrlRec.payload, "url", s.selected)) {
+        document.getElementById("urlClearBtn").hidden = false;
+        setUrlStatus("โหลดลิงก์ไม่สำเร็จ (" + urlErrMsg(e) + ") — แสดงข้อมูลล่าสุดที่เคยโหลดไว้ " +
+          new Date(savedUrlRec.importedAt).toLocaleString("th-TH"), true);
+      } else {
+        setUrlStatus("โหลดลิงก์ไม่สำเร็จ: " + urlErrMsg(e), true);
+      }
+    }
+  }
+
+  if (!DATA && s.useMeta && savedAccts && s.token) {
     connPanel.hidden = false;
     connToggle.setAttribute("aria-expanded", "true");
     try {
