@@ -22,6 +22,14 @@
     --up-good:     #006300;
     --down-bad:    #d03b3b;
     --chip-bg:     #f0efec;
+    --funnel-1:    #184f95;  /* ordinal ramp น้ำเงิน เข้ม -> อ่อน */
+    --funnel-2:    #2a78d6;
+    --funnel-3:    #5598e7;
+    --funnel-4:    #86b6ef;
+    --funnel-ink-1: #ffffff;
+    --funnel-ink-2: #ffffff;
+    --funnel-ink-3: #0b0b0b;
+    --funnel-ink-4: #0b0b0b;
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
@@ -40,6 +48,14 @@
       --up-good:     #0ca30c;
       --down-bad:    #e66767;
       --chip-bg:     #262624;
+      --funnel-1:    #184f95;
+      --funnel-2:    #256abf;
+      --funnel-3:    #3987e5;
+      --funnel-4:    #6da7ec;
+      --funnel-ink-1: #ffffff;
+      --funnel-ink-2: #ffffff;
+      --funnel-ink-3: #ffffff;
+      --funnel-ink-4: #0b0b0b;
     }
   }
   :root[data-theme="dark"] {
@@ -58,6 +74,14 @@
     --up-good:     #0ca30c;
     --down-bad:    #e66767;
     --chip-bg:     #262624;
+    --funnel-1:    #184f95;
+    --funnel-2:    #256abf;
+    --funnel-3:    #3987e5;
+    --funnel-4:    #6da7ec;
+    --funnel-ink-1: #ffffff;
+    --funnel-ink-2: #ffffff;
+    --funnel-ink-3: #ffffff;
+    --funnel-ink-4: #0b0b0b;
   }
 
   * { box-sizing: border-box; }
@@ -213,6 +237,30 @@
   th { position: sticky; top: 0; background: var(--surface); color: var(--ink-2); font-weight: 600; z-index: 1; }
   td { font-variant-numeric: tabular-nums; color: var(--ink); }
   tr:last-child td { border-bottom: none; }
+
+  /* ---- funnel ---- */
+  .funnel-select {
+    font: inherit; font-size: 13px; font-weight: 500;
+    color: var(--ink); background: var(--surface);
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 5px 10px; cursor: pointer; max-width: 100%;
+  }
+  .funnel-select:focus-visible { outline: 2px solid var(--series-1); outline-offset: 2px; }
+  .funnel { display: flex; flex-direction: column; gap: 2px; }
+  .f-stage {
+    margin-inline: auto; border-radius: 9px; padding: 9px 14px;
+    text-align: center; min-width: min(100%, 200px);
+  }
+  .f-stage .f-name { font-size: 12px; font-weight: 600; opacity: 0.92; }
+  .f-stage .f-val { font-size: 22px; font-weight: 700; line-height: 1.2; }
+  .f-stage .f-sub { font-size: 11px; opacity: 0.85; }
+  .f-rate { text-align: center; font-size: 12px; color: var(--ink-2); padding: 5px 0; }
+  .f-rate b { font-variant-numeric: tabular-nums; }
+  .f-warn {
+    background: var(--chip-bg); border: 1px solid var(--border); border-radius: 10px;
+    padding: 10px 14px; font-size: 12.5px; color: var(--ink-2);
+  }
+  .f-warn strong { color: var(--ink); }
 
   /* ---- content section ---- */
   .split { display: grid; grid-template-columns: 5fr 7fr; gap: 20px; align-items: start; }
@@ -383,6 +431,19 @@
 
   <section class="card">
     <div class="card-head">
+      <h2>ฟันเนล Conversion</h2>
+      <span class="desc">Impression → คลิก → ทักแชท → ออเดอร์ ของคอนเท้นต์ที่เลือก — ดูว่าคนหลุดฟันเนลตรงขั้นไหนมากที่สุด</span>
+    </div>
+    <div>
+      <label class="lbl" for="funnelSelect" style="margin-right:6px">คอนเท้นต์</label>
+      <select class="funnel-select" id="funnelSelect"></select>
+    </div>
+    <div class="funnel" id="funnelChart" aria-label="ฟันเนล Conversion"></div>
+    <div class="f-warn" id="funnelWarn" hidden></div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
       <h2>ผลงานรายคอนเท้นต์</h2>
       <span class="desc">โฆษณา/โพสต์ที่รันในช่วงเวลาที่เลือก</span>
     </div>
@@ -490,7 +551,7 @@ function sampleData() {
     const spend = distribute(day.spend, wBase);
     const impressions = distribute(day.impressions, wBase);
     const reach = distribute(day.reach, wBase);
-    const clicks = distribute(day.clicks, wMsg);
+    const clicks = distribute(day.clicks, wBase);
     const conversations = distribute(day.conversations, wMsg);
     const purchases = distribute(day.purchases, wPur);
     const revenue = distribute(day.revenue, wPur);
@@ -1146,12 +1207,11 @@ function renderMsgChart() {
 
 /* ---------------- content section ---------------- */
 
-function renderContent() {
+/* รวมแถวรายวันของแต่ละคอนเท้นต์ในช่วงเวลาที่เลือก */
+function contentItems() {
   const rows = currentRows();
-  if (!rows.length) return;
+  if (!rows.length) return [];
   const rangeStart = rows[0].date;
-
-  /* รวมแถวรายวันของแต่ละคอนเท้นต์ในช่วงที่เลือก */
   const byName = new Map();
   for (const r of DATA.contentDaily) {
     if (r.date < rangeStart) continue;
@@ -1165,7 +1225,13 @@ function renderContent() {
     it.clicks += r.clicks; it.conversations += r.conversations;
     it.purchases += r.purchases; it.revenue += r.revenue;
   }
-  const items = [...byName.values()].sort((a, b) => b.revenue - a.revenue || b.spend - a.spend);
+  return [...byName.values()].sort((a, b) => b.revenue - a.revenue || b.spend - a.spend);
+}
+
+function renderContent() {
+  const rows = currentRows();
+  if (!rows.length) return;
+  const items = contentItems();
 
   /* horizontal bars: top 5 by revenue */
   const barsHost = document.getElementById("contentBars");
@@ -1209,6 +1275,109 @@ function renderContent() {
   tblHost.replaceChildren(table);
 }
 
+/* ---------------- funnel: Impression → Click → Message → Order ---------------- */
+
+let funnelSel = "__all__";
+
+function fmtPct(v) { return (Number.isFinite(v) ? v : 0).toFixed(1) + "%"; }
+
+function renderFunnel() {
+  const rows = currentRows();
+  if (!rows.length) return;
+  const items = contentItems();
+
+  /* dropdown เลือกคอนเท้นต์ */
+  const sel = document.getElementById("funnelSelect");
+  sel.replaceChildren();
+  sel.append(new Option("ทุกคอนเท้นต์ (รวม)", "__all__"));
+  for (const it of items) sel.append(new Option(it.name, it.name));
+  if (![...sel.options].some(o => o.value === funnelSel)) funnelSel = "__all__";
+  sel.value = funnelSel;
+
+  const totals = {
+    impressions: sum(rows, "impressions"), clicks: sum(rows, "clicks"),
+    conversations: sum(rows, "conversations"), purchases: sum(rows, "purchases"),
+  };
+  const d = funnelSel === "__all__" ? totals :
+    (items.find(x => x.name === funnelSel) || { impressions: 0, clicks: 0, conversations: 0, purchases: 0 });
+
+  const stages = [
+    ["Impression", d.impressions],
+    ["Click", d.clicks],
+    ["Message", d.conversations],
+    ["Order", d.purchases],
+  ];
+  const rates = [
+    ["Click Rate", d.clicks, d.impressions, "ของ Impression"],
+    ["Message Rate", d.conversations, d.clicks, "ของ Click"],
+    ["Order Rate", d.purchases, d.conversations, "ของ Message"],
+  ];
+  const widths = [100, 76, 57, 43];  /* ความกว้างเชิงสัญลักษณ์ — ตัวเลขจริงอยู่ในแท่งและอัตราระหว่างขั้น */
+
+  const host = document.getElementById("funnelChart");
+  host.replaceChildren();
+  stages.forEach(([name, val], i) => {
+    if (i > 0) {
+      const [rn, num, den, of] = rates[i - 1];
+      const r = el("div", { class: "f-rate" });
+      r.append(document.createTextNode("↓ " + rn + ": "));
+      r.append(el("b", null, fmtPct(den ? num / den * 100 : 0)));
+      r.append(document.createTextNode(" " + of));
+      host.append(r);
+    }
+    const st = el("div", { class: "f-stage" });
+    st.style.background = "var(--funnel-" + (i + 1) + ")";
+    st.style.color = "var(--funnel-ink-" + (i + 1) + ")";
+    st.style.width = widths[i] + "%";
+    st.append(el("div", { class: "f-name" }, name));
+    st.append(el("div", { class: "f-val" }, fmtNum(val)));
+    st.append(el("div", { class: "f-sub" },
+      fmtPct(d.impressions ? val / d.impressions * 100 : 0) + " ของ Impression"));
+    host.append(st);
+  });
+
+  /* หา "คอนเท้นต์ที่น่าจะมีปัญหา": อัตราขั้นใดขั้นหนึ่งต่ำกว่าค่าเฉลี่ยรวมชัดเจน */
+  const warn = document.getElementById("funnelWarn");
+  warn.hidden = true;
+  if (funnelSel === "__all__" && items.length > 1) {
+    const avgMsg = totals.clicks ? totals.conversations / totals.clicks : 0;
+    const avgOrd = totals.conversations ? totals.purchases / totals.conversations : 0;
+    const cands = [];
+    for (const it of items) {
+      if (avgMsg > 0 && it.clicks >= 50) {
+        const rate = it.conversations / it.clicks;
+        if (rate / avgMsg < 0.7) cands.push({
+          it, score: rate / avgMsg, metric: "Message Rate", rate, avg: avgMsg,
+          hint: "คนคลิกแล้วไม่ค่อยทักแชท ลองเช็ค CTA และหน้าที่คลิกไปถึง",
+        });
+      }
+      if (avgOrd > 0 && it.conversations >= 20) {
+        const rate = it.purchases / it.conversations;
+        if (rate / avgOrd < 0.7) cands.push({
+          it, score: rate / avgOrd, metric: "Order Rate", rate, avg: avgOrd,
+          hint: "คนทักแชทแล้วไม่ค่อยปิดการขาย ลองเช็คสคริปต์ตอบแชทและข้อเสนอ",
+        });
+      }
+    }
+    cands.sort((a, b) => a.score - b.score);
+    const c = cands[0];
+    if (c) {
+      warn.replaceChildren();
+      warn.append(document.createTextNode("⚠️ พบคอนเท้นต์ที่น่าจะมีปัญหา: "));
+      warn.append(el("strong", null, c.it.name));
+      warn.append(document.createTextNode(
+        " — " + c.metric + " ของคอนเท้นต์นี้ (" + fmtPct(c.rate * 100) +
+        ") ต่ำกว่าค่าเฉลี่ยรวม (" + fmtPct(c.avg * 100) + ") — " + c.hint));
+      warn.hidden = false;
+    }
+  }
+}
+
+document.getElementById("funnelSelect").addEventListener("change", ev => {
+  funnelSel = ev.target.value;
+  renderFunnel();
+});
+
 /* ---------------- wiring ---------------- */
 
 const SOURCE_BADGES = {
@@ -1232,6 +1401,7 @@ function renderAll() {
   renderTiles();
   renderLineChart();
   renderMsgChart();
+  renderFunnel();
   renderContent();
 }
 
