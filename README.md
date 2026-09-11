@@ -64,6 +64,28 @@ META_AD_ACCOUNT_IDS="act_1111111111, act_2222222222" META_ACCESS_TOKEN=EAAB... n
 - ใช้ได้ทุกที่ รวมถึงหน้า artifact บน claude.ai (เพราะไม่ต้องเรียก API)
 - อยากอัปเดตข้อมูล → export ไฟล์ใหม่แล้วนำเข้าซ้ำ / แชร์ให้เพื่อนดู → ส่งไฟล์ .csv ให้เพื่อนนำเข้าเอง
 
+### ทางที่ 4 — Make.com → Google Sheet → ลิงก์อัตโนมัติ (ไม่ต้องมีบัญชี developer และอัปเดตเองทุกวัน)
+
+Make.com เชื่อม Facebook ด้วยการล็อกอินปกติ (ใช้แอปของ Make เอง) จึง**ไม่ต้องสมัคร Meta for Developers**
+
+1. **สร้าง Google Sheet** ที่มีหัวคอลัมน์แถวแรก (ภาษาอังกฤษหรือไทยก็ได้ ระบบตรวจจับอัตโนมัติ):
+   `Day, Ad name, Amount spent, Impressions, Reach, Link clicks, Messaging conversations started, Purchases, Purchases conversion value`
+2. **สร้าง Scenario ใน Make.com** ตั้งเวลารันทุกวัน:
+   - โมดูล Facebook/Meta Ads → เชื่อมต่อด้วยการล็อกอิน Facebook ของคุณ (คนที่เห็นบัญชีโฆษณา)
+   - ดึง insights รายวันระดับโฆษณา (ย้อนหลัง 90 วัน) — ถ้าโมดูลสำเร็จรูปไม่มีครบ ใช้โมดูล
+     "Make an API Call" ของแอป Facebook เรียก
+     `/act_<ID>/insights?level=ad&time_increment=1&date_preset=last_90d&fields=ad_name,spend,impressions,reach,clicks,actions,action_values`
+   - แตกค่า: คนทักแชท = `actions` ที่ `action_type = onsite_conversion.messaging_conversation_started_7d`,
+     ออเดอร์ = `omni_purchase`, ยอดขาย = ค่าเดียวกันใน `action_values`
+   - เคลียร์ข้อมูลเก่าใน Sheet แล้วเขียนแถวใหม่ทั้งหมด
+3. **เผยแพร่ Sheet:** ไฟล์ → แชร์ → **เผยแพร่ไปยังเว็บ** → เลือกชีตนั้น + รูปแบบ **.csv** → copy ลิงก์
+4. **ผูกกับแดชบอร์ด:** ปุ่ม "เชื่อมต่อ Meta API" → ส่วน **"ดึงจากลิงก์อัตโนมัติ"** → วางลิงก์ → โหลด
+   - ระบบจำลิงก์ไว้ เปิดหน้าครั้งต่อไปโหลดข้อมูลสดจาก Sheet ให้เองทุกครั้ง
+   - แชร์ให้ทีม: ส่ง URL แดชบอร์ดต่อท้ายด้วย `?data=<ลิงก์ sheet>` — เพื่อนเปิดแล้วเห็นข้อมูลทันที
+
+ข้อควรรู้: ลิงก์ Sheet ที่เผยแพร่แล้ว ใครมีลิงก์ก็เปิดดูได้ (ไม่ถูก index แต่ไม่ควรแชร์นอกทีม)
+และหน้าบน claude.ai โหลดลิงก์ภายนอกไม่ได้ — โหมดนี้ใช้กับไฟล์ที่เปิดจากเครื่องหรือเว็บที่โฮสต์แล้ว (GitHub Pages)
+
 ## ขึ้นเว็บด้วย GitHub Pages + ระบบล็อกอิน
 
 workflow `.github/workflows/pages.yml` จะ deploy เว็บให้อัตโนมัติเมื่อ push ขึ้น `main`
